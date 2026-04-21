@@ -1,14 +1,3 @@
-# Daily random Clockify time entries (2–4 per calendar day in TIMEZONE), only if that day has no entries yet.
-# GitHub Actions cron is UTC: adjust `schedule.cron` so the job runs after local midnight
-# for the day you want to log (e.g. 17:00 UTC ≈ next calendar day in some Asian zones).
-#
-# Required repo secrets:
-#   CLOCKIFY_API_KEY, CLOCKIFY_WORKSPACE_ID
-# Optional:
-#   CLOCKIFY_PROJECT_ID — attach all entries to this project
-#
-# Env vars below mirror scripts/clockify_daily.py — see `python scripts/clockify_daily.py --help`.
-
 name: Clockify daily
 
 on:
