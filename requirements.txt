@@ -1,0 +1,4 @@
+# Python 3.10+ (stdlib: urllib, zoneinfo, argparse).
+# tzdata supplies IANA time zones for zoneinfo on Windows (and aligns behavior across OSes).
+tzdata>=2024.1
+python-dotenv>=1.0

@@ -1,0 +1,54 @@
+# Daily random Clockify time entries (2–4 per calendar day in TIMEZONE), only if that day has no entries yet.
+# GitHub Actions cron is UTC: adjust `schedule.cron` so the job runs after local midnight
+# for the day you want to log (e.g. 17:00 UTC ≈ next calendar day in some Asian zones).
+#
+# Required repo secrets:
+#   CLOCKIFY_API_KEY, CLOCKIFY_WORKSPACE_ID
+# Optional:
+#   CLOCKIFY_PROJECT_ID — attach all entries to this project
+#
+# Env vars below mirror scripts/clockify_daily.py — see `python scripts/clockify_daily.py --help`.
+
+name: Clockify daily
+
+on:
+  schedule:
+    # 17:00 UTC daily — change to match when “today” should be finalized in TIMEZONE
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: clockify-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    env:
+      CLOCKIFY_API_KEY: ${{ secrets.CLOCKIFY_API_KEY }}
+      CLOCKIFY_WORKSPACE_ID: ${{ secrets.CLOCKIFY_WORKSPACE_ID }}
+      CLOCKIFY_PROJECT_ID: ${{ secrets.CLOCKIFY_PROJECT_ID }}
+      TIMEZONE: UTC
+      WORKDAY_START: "09:00"
+      WORKDAY_END: "18:00"
+      MIN_ENTRIES: "2"
+      MAX_ENTRIES: "4"
+      MIN_MINUTES: "30"
+      MAX_MINUTES: "120"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Create time entries
+        run: python scripts/clockify_daily.py
