@@ -132,7 +132,8 @@ def test_run_debug_prints_requests(
     monkeypatch.setenv("TOTAL_MINUTES", "90")
     monkeypatch.setenv("CLOCKIFY_RANDOM_SEED", "99")
 
-    fixed = date(2024, 3, 10)
+    # Use a weekday; weekend dates are intentionally skipped by the script.
+    fixed = date(2024, 3, 11)
     monkeypatch.setattr(cd, "_today_in_tz", lambda _tz: fixed)
 
     cfg = cd.load_config(
