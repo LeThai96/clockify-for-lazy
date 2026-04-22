@@ -2,7 +2,7 @@ name: Clockify daily
 
 on:
   schedule:
-    # 17:00 UTC daily — change to match when “today” should be finalized in TIMEZONE
+    # 17:00 daily
     - cron: "0 17 * * *"
   workflow_dispatch:
 
@@ -20,7 +20,7 @@ jobs:
       CLOCKIFY_API_KEY: ${{ secrets.CLOCKIFY_API_KEY }}
       CLOCKIFY_WORKSPACE_ID: ${{ secrets.CLOCKIFY_WORKSPACE_ID }}
       CLOCKIFY_PROJECT_ID: ${{ secrets.CLOCKIFY_PROJECT_ID }}
-      TIMEZONE: UTC
+      TIMEZONE: Asia/Bangkok
       WORKDAY_START: "09:00"
       WORKDAY_END: "18:00"
       MIN_ENTRIES: "2"
