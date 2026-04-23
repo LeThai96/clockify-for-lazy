@@ -2,8 +2,8 @@ name: Clockify daily
 
 on:
   schedule:
-    # 17:00 daily
-    - cron: "0 17 * * *"
+    # 10:00 UTC (17:00 GMT+7)
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 concurrency:
