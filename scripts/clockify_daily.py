@@ -162,13 +162,14 @@ def create_time_entry(
     end: datetime,
     description: str,
     project_id: str | None,
+    billable: bool,
 ) -> dict[str, Any]:
     url = f"{API_BASE}/workspaces/{workspace_id}/time-entries"
     body: dict[str, Any] = {
         "start": _utc_iso(start),
         "end": _utc_iso(end),
         "description": description,
-        "billable": False,
+        "billable": billable,
     }
     if project_id:
         body["projectId"] = project_id
@@ -200,6 +201,7 @@ class Config:
     start_date: date | None
     end_date: date | None
     public_holidays: set[date]
+    day_offs: set[date]
 
 
 def load_config(
@@ -276,6 +278,11 @@ def load_config(
     if holidays_raw:
         for token in [x.strip() for x in holidays_raw.split(",") if x.strip()]:
             public_holidays.add(_parse_iso_day(token, "holiday"))
+    day_off_raw = os.environ.get("DAY_OFF", "").strip()
+    day_offs: set[date] = set()
+    if day_off_raw:
+        for token in [x.strip() for x in day_off_raw.split(",") if x.strip()]:
+            day_offs.add(_parse_iso_day(token, "day off"))
 
     if debug:
         if not api_key or not workspace_id:
@@ -322,6 +329,7 @@ def load_config(
         start_date=start_date,
         end_date=end_date,
         public_holidays=public_holidays,
+        day_offs=day_offs,
     )
 
 
@@ -338,8 +346,14 @@ def _target_days(cfg: Config) -> list[date]:
     return [_today_in_tz(cfg.tz)]
 
 
-def _is_non_working_day(day: date, cfg: Config) -> bool:
-    return day.weekday() >= 5 or day in cfg.public_holidays
+def _day_kind(day: date, cfg: Config) -> str:
+    if day in cfg.day_offs:
+        return "day_off"
+    if day in cfg.public_holidays:
+        return "public_holiday"
+    if day.weekday() >= 5:
+        return "weekend"
+    return "workday"
 
 
 def _window_bounds(day: date, cfg: Config) -> tuple[datetime, datetime]:
@@ -452,6 +466,19 @@ def _build_planned_entries(
     return intervals, descs
 
 
+def _build_special_day_entry(
+    cfg: Config,
+    day: date,
+    *,
+    description: str,
+) -> tuple[datetime, datetime, str, bool]:
+    start, window_end = _window_bounds(day, cfg)
+    end = start + timedelta(minutes=cfg.total_minutes)
+    if end > window_end:
+        raise RuntimeError("TOTAL_MINUTES exceeds work window for special day entry")
+    return start, end, description, False
+
+
 def run_debug(cfg: Config) -> int:
     print(
         "Clockify debug mode: no HTTP requests will be sent.\n",
@@ -461,8 +488,9 @@ def run_debug(cfg: Config) -> int:
     post_url = f"{API_BASE}/workspaces/{cfg.workspace_id}/time-entries"
 
     for day in _target_days(cfg):
-        if _is_non_working_day(day, cfg):
-            print(f"Skip {day.isoformat()}: weekend/public holiday.", file=sys.stdout)
+        day_kind = _day_kind(day, cfg)
+        if day_kind == "weekend":
+            print(f"Skip {day.isoformat()}: weekend.", file=sys.stdout)
             continue
 
         day_start = datetime.combine(day, time(0, 0), tzinfo=cfg.tz)
@@ -482,13 +510,20 @@ def run_debug(cfg: Config) -> int:
             print(file=sys.stdout)
 
         print("If the time-entries response is empty, the script would send:", file=sys.stdout)
-        intervals, descs = _build_planned_entries(cfg, day)
-        for (start, end), desc in zip(intervals, descs):
+        entries: list[tuple[datetime, datetime, str, bool]]
+        if day_kind == "day_off":
+            entries = [_build_special_day_entry(cfg, day, description="Day off")]
+        elif day_kind == "public_holiday":
+            entries = [_build_special_day_entry(cfg, day, description="Public holiday")]
+        else:
+            intervals, descs = _build_planned_entries(cfg, day)
+            entries = [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
+        for start, end, desc, billable in entries:
             body: dict[str, Any] = {
                 "start": _utc_iso(start),
                 "end": _utc_iso(end),
                 "description": desc,
-                "billable": False,
+                "billable": billable,
             }
             if cfg.project_id:
                 body["projectId"] = cfg.project_id
@@ -514,8 +549,9 @@ def run(cfg: Config) -> int:
         uid = str(uid_raw)
 
     for day in _target_days(cfg):
-        if _is_non_working_day(day, cfg):
-            print(f"Skip {day.isoformat()}: weekend/public holiday.", file=sys.stderr)
+        day_kind = _day_kind(day, cfg)
+        if day_kind == "weekend":
+            print(f"Skip {day.isoformat()}: weekend.", file=sys.stderr)
             continue
 
         if cfg.api_key and uid is not None and not cfg.ignore_day_has_entries:
@@ -536,13 +572,22 @@ def run(cfg: Config) -> int:
                 )
                 continue
 
-        intervals, descs = _build_planned_entries(cfg, day)
-        for (start, end), desc in zip(intervals, descs):
+        entries: list[tuple[datetime, datetime, str, bool]]
+        if day_kind == "day_off":
+            entries = [_build_special_day_entry(cfg, day, description="Day off")]
+        elif day_kind == "public_holiday":
+            entries = [_build_special_day_entry(cfg, day, description="Public holiday")]
+        else:
+            intervals, descs = _build_planned_entries(cfg, day)
+            entries = [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
+
+        for start, end, desc, billable in entries:
             payload = {
                 "start": _utc_iso(start),
                 "end": _utc_iso(end),
                 "description": desc,
                 "projectId": cfg.project_id,
+                "billable": billable,
             }
             if cfg.dry_run:
                 print(json.dumps(payload, indent=2))
@@ -554,6 +599,7 @@ def run(cfg: Config) -> int:
                     end=end,
                     description=desc,
                     project_id=cfg.project_id,
+                    billable=billable,
                 )
                 print(f"Logged: {desc} {_utc_iso(start)} .. {_utc_iso(end)}")
 
@@ -582,6 +628,7 @@ Environment variables:
   CLOCKIFY_TARGET_DATE       Optional target date YYYY-MM-DD (defaults to current date in TIMEZONE)
   CLOCKIFY_START_DATE        Optional range start date YYYY-MM-DD (inclusive)
   CLOCKIFY_END_DATE          Optional range end date YYYY-MM-DD (inclusive)
+  DAY_OFF                    Optional comma-separated dates (YYYY-MM-DD) logged as one non-billable "Day off" entry
   PUBLIC_HOLIDAYS            Optional comma-separated dates (YYYY-MM-DD) to skip
   DRY_RUN                    If 1, print payloads only (default 0)
 """

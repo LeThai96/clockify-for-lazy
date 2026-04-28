@@ -8,7 +8,11 @@ Automate Clockify time entries with randomized work reasons and realistic schedu
 - Exact daily total (default: `8 hours`)
 - Times aligned to `STEP_MINUTES` (default: 5-minute grid)
 - Skip days that already have records
-- Skip weekends and configurable public holidays
+- Skip weekends
+- Configurable `DAY_OFF` and `PUBLIC_HOLIDAYS`
+- On `DAY_OFF`: create one non-billable entry (`Day off`)
+- On `PUBLIC_HOLIDAYS`: create one non-billable entry (`Public holiday`)
+- On regular workdays: generated entries are billable
 - Support single date or date range backfill
 - Debug mode to print requests without sending them
 - GitHub Actions schedule support
@@ -49,6 +53,7 @@ MAX_MINUTES=120
 TOTAL_MINUTES=480
 STEP_MINUTES=5
 
+DAY_OFF=2026-04-07,2026-04-15
 PUBLIC_HOLIDAYS=2026-01-01,2026-04-30,2026-05-01
 ```
 
@@ -90,7 +95,10 @@ python scripts/clockify_daily.py --debug
   - `--date` (or `CLOCKIFY_TARGET_DATE`)
   - **or** `--start-date` + `--end-date` (or env equivalents)
 - Do not combine single-date and range options.
-- Range mode skips Saturdays, Sundays, and `PUBLIC_HOLIDAYS`.
+- Weekends are skipped.
+- `DAY_OFF` creates one non-billable entry with description `Day off`.
+- `PUBLIC_HOLIDAYS` creates one non-billable entry with description `Public holiday`.
+- For day off/public holiday entry length, script uses `TOTAL_MINUTES` starting at `WORKDAY_START`.
 
 ## GitHub Actions Daily Automation
 

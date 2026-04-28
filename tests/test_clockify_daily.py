@@ -66,6 +66,7 @@ def test_generate_intervals_non_overlapping() -> None:
         start_date=None,
         end_date=None,
         public_holidays=set(),
+        day_offs=set(),
     )
     intervals = cd._generate_intervals(rng, w0, w1, cfg)
     assert len(intervals) == 3
@@ -150,7 +151,7 @@ def test_run_debug_prints_requests(
     assert "GET https://api.clockify.me/api/v1/user" in out
     assert "workspace-xyz/user/<userId>/time-entries" in out
     assert "POST https://api.clockify.me/api/v1/workspaces/workspace-xyz/time-entries" in out
-    assert "billable" in out
+    assert '"billable": true' in out
     assert "Clockify debug mode" in err
     assert "abcd...mnop" in out and "redacted" in out
 
@@ -219,6 +220,7 @@ def test_run_creates_entries_when_empty(monkeypatch: pytest.MonkeyPatch) -> None
     for _args, kwargs in created:
         start = kwargs["start"]
         end = kwargs["end"]
+        assert kwargs["billable"] is True
         assert start.minute % 5 == 0
         assert end.minute % 5 == 0
         total += int((end - start).total_seconds() // 60)
@@ -245,7 +247,7 @@ def test_http_json_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out == {"id": "x", "name": "y"}
 
 
-def test_target_days_range_and_holidays(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
     monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
     monkeypatch.setenv("TIMEZONE", "UTC")
@@ -254,6 +256,7 @@ def test_target_days_range_and_holidays(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("TOTAL_MINUTES", "120")
     monkeypatch.setenv("CLOCKIFY_TARGET_DATE", "")
     monkeypatch.setenv("PUBLIC_HOLIDAYS", "2026-04-06")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
     monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
 
     monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
@@ -272,9 +275,21 @@ def test_target_days_range_and_holidays(monkeypatch: pytest.MonkeyPatch) -> None
         debug_cli=False,
         target_date_cli=None,
         start_date_cli="2026-04-03",
-        end_date_cli="2026-04-07",
+        end_date_cli="2026-04-08",
     )
     assert cd.run(cfg) == 0
-    # Range Fri..Tue with weekend + holiday on Monday => only Fri and Tue are logged.
-    # 2 entries/day by config => total 4 created entries.
-    assert len(created) == 4
+    # Fri and Wed are normal workdays -> 2 billable entries each = 4
+    # Mon is a public holiday -> 1 non-billable special entry
+    # Tue is a day off -> 1 non-billable special entry
+    # Weekend is skipped
+    assert len(created) == 6
+    holiday = [kwargs for _args, kwargs in created if kwargs["description"] == "Public holiday"]
+    day_off = [kwargs for _args, kwargs in created if kwargs["description"] == "Day off"]
+    assert len(holiday) == 1
+    assert len(day_off) == 1
+    assert holiday[0]["billable"] is False
+    assert day_off[0]["billable"] is False
+    holiday_minutes = int((holiday[0]["end"] - holiday[0]["start"]).total_seconds() // 60)
+    day_off_minutes = int((day_off[0]["end"] - day_off[0]["start"]).total_seconds() // 60)
+    assert holiday_minutes == 120
+    assert day_off_minutes == 120
