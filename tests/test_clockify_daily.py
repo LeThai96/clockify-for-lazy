@@ -164,6 +164,19 @@ def test_run_skips_when_day_has_entries(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(cd, "_today_in_tz", lambda _tz: date(2024, 5, 1))
     monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(
+        cd,
+        "list_workspace_tags",
+        lambda *_a, **_k: [
+            {"id": "tag-meeting", "name": "Meeting"},
+            {"id": "tag-dev", "name": "Development"},
+            {"id": "tag-bug", "name": "Bug fixes"},
+            {"id": "tag-review", "name": "Code review"},
+            {"id": "tag-doc", "name": "Documenting"},
+            {"id": "tag-leave", "name": "On-Leave"},
+            {"id": "tag-holiday", "name": "Public Holiday"},
+        ],
+    )
     monkeypatch.setattr(cd, "list_time_entries", lambda *a, **k: [{"id": "e1"}])
 
     created: list[object] = []
@@ -197,6 +210,19 @@ def test_run_creates_entries_when_empty(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(cd, "_today_in_tz", lambda _tz: date(2024, 5, 2))
     monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(
+        cd,
+        "list_workspace_tags",
+        lambda *_a, **_k: [
+            {"id": "tag-meeting", "name": "Meeting"},
+            {"id": "tag-dev", "name": "Development"},
+            {"id": "tag-bug", "name": "Bug fixes"},
+            {"id": "tag-review", "name": "Code Review"},
+            {"id": "tag-doc", "name": "Documenting"},
+            {"id": "tag-leave", "name": "On-Leave"},
+            {"id": "tag-holiday", "name": "Public Holiday"},
+        ],
+    )
     monkeypatch.setattr(cd, "list_time_entries", lambda *a, **k: [])
 
     created: list[object] = []
@@ -221,6 +247,7 @@ def test_run_creates_entries_when_empty(monkeypatch: pytest.MonkeyPatch) -> None
         start = kwargs["start"]
         end = kwargs["end"]
         assert kwargs["billable"] is True
+        assert len(kwargs["tag_ids"]) == 1
         assert start.minute % 5 == 0
         assert end.minute % 5 == 0
         total += int((end - start).total_seconds() // 60)
@@ -260,6 +287,19 @@ def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
 
     monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(
+        cd,
+        "list_workspace_tags",
+        lambda *_a, **_k: [
+            {"id": "tag-meeting", "name": "Meeting"},
+            {"id": "tag-dev", "name": "Development"},
+            {"id": "tag-bug", "name": "Bug fixes"},
+            {"id": "tag-review", "name": "Code review"},
+            {"id": "tag-doc", "name": "Documenting"},
+            {"id": "tag-leave", "name": "On-Leave"},
+            {"id": "tag-holiday", "name": "Public Holiday"},
+        ],
+    )
     monkeypatch.setattr(cd, "list_time_entries", lambda *a, **k: [])
 
     created: list[object] = []
@@ -293,3 +333,23 @@ def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) 
     day_off_minutes = int((day_off[0]["end"] - day_off[0]["start"]).total_seconds() // 60)
     assert holiday_minutes == 120
     assert day_off_minutes == 120
+    assert holiday[0]["tag_ids"] == ["tag-holiday"]
+    assert day_off[0]["tag_ids"] == ["tag-leave"]
+
+
+def test_run_fails_when_required_tags_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    monkeypatch.setattr(cd, "_today_in_tz", lambda _tz: date(2024, 5, 1))
+    monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(cd, "list_workspace_tags", lambda *_a, **_k: [{"id": "t1", "name": "Meeting"}])
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli=None,
+        start_date_cli=None,
+        end_date_cli=None,
+    )
+    assert cd.run(cfg) == 1

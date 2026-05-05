@@ -19,6 +19,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, TextIO
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
+from clockify_tags import DESCRIPTION_TO_TAG_NAME, find_missing_tag_names, resolve_tag_id, tags_by_name
 
 API_BASE = "https://api.clockify.me/api/v1"
 
@@ -32,7 +33,6 @@ DEFAULT_DESCRIPTIONS = [
     "Planning",
     "Sync with team",
 ]
-
 
 def _env_bool(name: str, default: bool = False) -> bool:
     v = os.environ.get(name)
@@ -163,6 +163,7 @@ def create_time_entry(
     description: str,
     project_id: str | None,
     billable: bool,
+    tag_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     url = f"{API_BASE}/workspaces/{workspace_id}/time-entries"
     body: dict[str, Any] = {
@@ -173,6 +174,8 @@ def create_time_entry(
     }
     if project_id:
         body["projectId"] = project_id
+    if tag_ids:
+        body["tagIds"] = tag_ids
     out = _http_json("POST", url, api_key=api_key, body=body)
     if not isinstance(out, dict):
         raise RuntimeError("Unexpected create time entry response")
@@ -479,6 +482,14 @@ def _build_special_day_entry(
     return start, end, description, False
 
 
+def list_workspace_tags(api_key: str, workspace_id: str) -> list[dict[str, Any]]:
+    url = f"{API_BASE}/workspaces/{workspace_id}/tags"
+    out = _http_json("GET", url, api_key=api_key)
+    if isinstance(out, list):
+        return out
+    raise RuntimeError("Unexpected /tags response")
+
+
 def run_debug(cfg: Config) -> int:
     print(
         "Clockify debug mode: no HTTP requests will be sent.\n",
@@ -540,6 +551,7 @@ def run(cfg: Config) -> int:
         print("Dry-run: no API key — printing sample payloads only.", file=sys.stderr)
 
     uid: str | None = None
+    tag_name_to_id: dict[str, str] = {}
     if cfg.api_key:
         user = get_user(cfg.api_key)
         uid_raw = user.get("id")
@@ -547,6 +559,15 @@ def run(cfg: Config) -> int:
             print("Could not read user id from /user", file=sys.stderr)
             return 1
         uid = str(uid_raw)
+        tags = list_workspace_tags(cfg.api_key, cfg.workspace_id)
+        tag_name_to_id = tags_by_name(tags)
+        missing_tag_names = find_missing_tag_names(tag_name_to_id)
+        if missing_tag_names:
+            print(
+                f"Missing workspace tags: {', '.join(missing_tag_names)}",
+                file=sys.stderr,
+            )
+            return 1
 
     for day in _target_days(cfg):
         day_kind = _day_kind(day, cfg)
@@ -582,6 +603,13 @@ def run(cfg: Config) -> int:
             entries = [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
 
         for start, end, desc, billable in entries:
+            tag_name = DESCRIPTION_TO_TAG_NAME.get(desc)
+            tag_id = (
+                resolve_tag_id(tag_name_to_id, tag_name)
+                if (tag_name is not None and tag_name_to_id)
+                else None
+            )
+            tag_ids = [tag_id] if tag_id is not None else []
             payload = {
                 "start": _utc_iso(start),
                 "end": _utc_iso(end),
@@ -589,6 +617,8 @@ def run(cfg: Config) -> int:
                 "projectId": cfg.project_id,
                 "billable": billable,
             }
+            if tag_ids:
+                payload["tagIds"] = tag_ids
             if cfg.dry_run:
                 print(json.dumps(payload, indent=2))
             else:
@@ -600,6 +630,7 @@ def run(cfg: Config) -> int:
                     description=desc,
                     project_id=cfg.project_id,
                     billable=billable,
+                    tag_ids=tag_ids,
                 )
                 print(f"Logged: {desc} {_utc_iso(start)} .. {_utc_iso(end)}")
 

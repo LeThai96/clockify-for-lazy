@@ -89,6 +89,14 @@ python scripts/clockify_daily.py --dry-run
 python scripts/clockify_daily.py --debug
 ```
 
+### Add tags to existing entries
+
+```powershell
+python scripts/clockify_tag_existing.py --start-date 2026-04-01 --end-date 2026-04-30
+```
+
+Use `--dry-run` first to preview tag updates without sending PATCH requests.
+
 ## Important Date Rules
 
 - Use either:
