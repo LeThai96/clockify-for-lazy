@@ -118,12 +118,28 @@ Set repository secrets:
 - `CLOCKIFY_WORKSPACE_ID`
 - `CLOCKIFY_PROJECT_ID` (optional)
 
-Then keep workflow command:
+Set repository variables under **Settings → Secrets and variables → Actions → Variables**. Each variable is optional. If it is missing, the workflow uses the default below.
 
-```yaml
-- name: Create time entries
-  run: python scripts/clockify_daily.py
+| Variable | Default |
+| --- | --- |
+| `TIMEZONE` | `Asia/Bangkok` |
+| `WORKDAY_START` | `09:00` |
+| `WORKDAY_END` | `18:00` |
+| `MIN_ENTRIES` | `2` |
+| `MAX_ENTRIES` | `4` |
+| `MIN_MINUTES` | `30` |
+| `MAX_MINUTES` | `120` |
+| `PUBLIC_HOLIDAYS` | empty (comma- or newline-separated `YYYY-MM-DD`) |
+
+`PUBLIC_HOLIDAYS` is a repository variable, so changing the holiday list does not require a code change. Example:
+
+```text
+2026-01-01,2026-04-30,2026-05-01,2026-09-01,2026-09-02
 ```
+
+One date per line also works. `.env` is not on the runner; local runs read `PUBLIC_HOLIDAYS` from `.env`, and Actions reads the variable.
+
+The schedule stays in the workflow file as `0 5 * * *` (05:00 UTC, 12:00 Asia/Bangkok). GitHub Actions does not expand variables inside `cron`, so changing the run time still means editing that line.
 
 For daily automation, do not set `CLOCKIFY_TARGET_DATE`, `CLOCKIFY_START_DATE`, or `CLOCKIFY_END_DATE`.
 

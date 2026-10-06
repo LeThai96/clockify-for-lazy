@@ -41,6 +41,24 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _parse_iso_day(value: str, label: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as e:
+        raise SystemExit(f"Invalid {label} {value!r}; expected YYYY-MM-DD") from e
+
+
+def _parse_date_tokens(raw: str, label: str) -> set[date]:
+    """Parse YYYY-MM-DD tokens separated by commas or newlines."""
+    found: set[date] = set()
+    for line in raw.splitlines() or [raw]:
+        for token in line.split(","):
+            token = token.strip()
+            if token:
+                found.add(_parse_iso_day(token, label))
+    return found
+
+
 def _parse_hhmm(s: str) -> tuple[int, int]:
     parts = s.strip().split(":")
     if len(parts) != 2:
@@ -254,12 +272,6 @@ def load_config(
     start_date_raw = start_date_cli or os.environ.get("CLOCKIFY_START_DATE", "").strip()
     end_date_raw = end_date_cli or os.environ.get("CLOCKIFY_END_DATE", "").strip()
 
-    def _parse_iso_day(value: str, label: str) -> date:
-        try:
-            return date.fromisoformat(value)
-        except ValueError as e:
-            raise SystemExit(f"Invalid {label} {value!r}; expected YYYY-MM-DD") from e
-
     target_date: date | None = None
     start_date: date | None = None
     end_date: date | None = None
@@ -276,16 +288,8 @@ def load_config(
     if start_date is not None and end_date is not None and start_date > end_date:
         raise SystemExit("START_DATE must be <= END_DATE")
 
-    holidays_raw = os.environ.get("PUBLIC_HOLIDAYS", "").strip()
-    public_holidays: set[date] = set()
-    if holidays_raw:
-        for token in [x.strip() for x in holidays_raw.split(",") if x.strip()]:
-            public_holidays.add(_parse_iso_day(token, "holiday"))
-    day_off_raw = os.environ.get("DAY_OFF", "").strip()
-    day_offs: set[date] = set()
-    if day_off_raw:
-        for token in [x.strip() for x in day_off_raw.split(",") if x.strip()]:
-            day_offs.add(_parse_iso_day(token, "day off"))
+    public_holidays = _parse_date_tokens(os.environ.get("PUBLIC_HOLIDAYS", ""), "holiday")
+    day_offs = _parse_date_tokens(os.environ.get("DAY_OFF", ""), "day off")
 
     if debug:
         if not api_key or not workspace_id:
@@ -490,11 +494,19 @@ def list_workspace_tags(api_key: str, workspace_id: str) -> list[dict[str, Any]]
     raise RuntimeError("Unexpected /tags response")
 
 
+def _log_calendar(cfg: Config) -> None:
+    print(
+        f"Calendar: {len(cfg.public_holidays)} public holidays, {len(cfg.day_offs)} day offs.",
+        file=sys.stderr,
+    )
+
+
 def run_debug(cfg: Config) -> int:
     print(
         "Clockify debug mode: no HTTP requests will be sent.\n",
         file=sys.stderr,
     )
+    _log_calendar(cfg)
     _debug_print_request("GET", f"{API_BASE}/user", api_key=cfg.api_key)
     post_url = f"{API_BASE}/workspaces/{cfg.workspace_id}/time-entries"
 
@@ -547,6 +559,7 @@ def run(cfg: Config) -> int:
     if cfg.debug:
         return run_debug(cfg)
 
+    _log_calendar(cfg)
     if cfg.dry_run and not cfg.api_key:
         print("Dry-run: no API key — printing sample payloads only.", file=sys.stderr)
 
@@ -574,6 +587,12 @@ def run(cfg: Config) -> int:
         if day_kind == "weekend":
             print(f"Skip {day.isoformat()}: weekend.", file=sys.stderr)
             continue
+        if day_kind == "public_holiday":
+            print(f"{day.isoformat()}: public holiday.", file=sys.stderr)
+        elif day_kind == "day_off":
+            print(f"{day.isoformat()}: day off.", file=sys.stderr)
+        else:
+            print(f"{day.isoformat()}: workday.", file=sys.stderr)
 
         if cfg.api_key and uid is not None and not cfg.ignore_day_has_entries:
             day_start = datetime.combine(day, time(0, 0), tzinfo=cfg.tz)
@@ -660,7 +679,7 @@ Environment variables:
   CLOCKIFY_START_DATE        Optional range start date YYYY-MM-DD (inclusive)
   CLOCKIFY_END_DATE          Optional range end date YYYY-MM-DD (inclusive)
   DAY_OFF                    Optional comma-separated dates (YYYY-MM-DD) logged as one non-billable "Day off" entry
-  PUBLIC_HOLIDAYS            Optional comma-separated dates (YYYY-MM-DD) to skip
+  PUBLIC_HOLIDAYS            Comma- or newline-separated YYYY-MM-DD dates logged as one non-billable "Public holiday" entry. On Actions, set the repository variable.
   DRY_RUN                    If 1, print payloads only (default 0)
 """
     p = argparse.ArgumentParser(

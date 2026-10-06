@@ -2,8 +2,9 @@ name: Clockify daily
 
 on:
   schedule:
-    # 10:00 UTC (17:00 GMT+7)
-    - cron: "0 10 * * *"
+    # GitHub Actions does not expand variables inside cron.
+    # 5:00 UTC is 12:00 in Asia/Bangkok. Change this line to move the run.
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -20,13 +21,14 @@ jobs:
       CLOCKIFY_API_KEY: ${{ secrets.CLOCKIFY_API_KEY }}
       CLOCKIFY_WORKSPACE_ID: ${{ secrets.CLOCKIFY_WORKSPACE_ID }}
       CLOCKIFY_PROJECT_ID: ${{ secrets.CLOCKIFY_PROJECT_ID }}
-      TIMEZONE: Asia/Bangkok
-      WORKDAY_START: "09:00"
-      WORKDAY_END: "18:00"
-      MIN_ENTRIES: "2"
-      MAX_ENTRIES: "4"
-      MIN_MINUTES: "30"
-      MAX_MINUTES: "120"
+      TIMEZONE: ${{ vars.TIMEZONE || 'Asia/Bangkok' }}
+      WORKDAY_START: ${{ vars.WORKDAY_START || '09:00' }}
+      WORKDAY_END: ${{ vars.WORKDAY_END || '18:00' }}
+      MIN_ENTRIES: ${{ vars.MIN_ENTRIES || '2' }}
+      MAX_ENTRIES: ${{ vars.MAX_ENTRIES || '4' }}
+      MIN_MINUTES: ${{ vars.MIN_MINUTES || '30' }}
+      MAX_MINUTES: ${{ vars.MAX_MINUTES || '120' }}
+      PUBLIC_HOLIDAYS: ${{ vars.PUBLIC_HOLIDAYS }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

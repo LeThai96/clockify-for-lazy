@@ -337,6 +337,67 @@ def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) 
     assert day_off[0]["tag_ids"] == ["tag-leave"]
 
 
+def test_public_holidays_from_env_commas_or_newlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PUBLIC_HOLIDAYS", "2026-09-01\n2026-09-02,2026-11-24")
+    monkeypatch.setenv("DAY_OFF", "")
+    monkeypatch.setenv("DRY_RUN", "1")
+    cfg = cd.load_config(
+        dry_run_cli=True,
+        debug_cli=False,
+        target_date_cli="2026-09-01",
+        start_date_cli=None,
+        end_date_cli=None,
+    )
+    assert cfg.public_holidays == {date(2026, 9, 1), date(2026, 9, 2), date(2026, 11, 24)}
+    assert cd._day_kind(date(2026, 9, 1), cfg) == "public_holiday"
+    assert cd._day_kind(date(2026, 9, 2), cfg) == "public_holiday"
+
+
+def test_actions_variable_logs_public_holiday(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "Asia/Bangkok")
+    monkeypatch.setenv("PUBLIC_HOLIDAYS", "2026-09-01,2026-09-02")
+    monkeypatch.setenv("DAY_OFF", "")
+    monkeypatch.setenv("MIN_ENTRIES", "2")
+    monkeypatch.setenv("MAX_ENTRIES", "4")
+    monkeypatch.setenv("TOTAL_MINUTES", "480")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(
+        cd,
+        "list_workspace_tags",
+        lambda *_a, **_k: [
+            {"id": "tag-meeting", "name": "Meeting"},
+            {"id": "tag-dev", "name": "Development"},
+            {"id": "tag-bug", "name": "Bug fixes"},
+            {"id": "tag-review", "name": "Code review"},
+            {"id": "tag-doc", "name": "Documenting"},
+            {"id": "tag-leave", "name": "On-Leave"},
+            {"id": "tag-holiday", "name": "Public Holiday"},
+        ],
+    )
+    monkeypatch.setattr(cd, "list_time_entries", lambda *a, **k: [])
+    created: list[dict] = []
+
+    def capture_create(*_a, **kwargs):
+        created.append(kwargs)
+        return {"id": "new"}
+
+    monkeypatch.setattr(cd, "create_time_entry", capture_create)
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli="2026-09-02",
+        start_date_cli=None,
+        end_date_cli=None,
+    )
+    assert cd.run(cfg) == 0
+    assert len(created) == 1
+    assert created[0]["description"] == "Public holiday"
+    assert created[0]["billable"] is False
+
+
 def test_run_fails_when_required_tags_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
     monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
