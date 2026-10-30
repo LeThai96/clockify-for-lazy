@@ -14,6 +14,7 @@ DESCRIPTION_TO_TAG_NAME = {
     "Planning": "Meeting",
     "Sync with team": "Meeting",
     "Day off": "On-Leave",
+    "Annual leave": "On-Leave",
     "Public holiday": "Public Holiday",
 }
 

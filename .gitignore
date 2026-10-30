@@ -14,6 +14,9 @@ venv/
 .venv/
 env/
 
+# Review run files
+reviews/
+
 # Test and coverage
 .pytest_cache/
 .coverage

@@ -68,6 +68,7 @@ def test_run_updates_matching_entries(monkeypatch: pytest.MonkeyPatch) -> None:
             {"id": "e4", "description": "Planning", "tagIds": ["tag-meeting"]},
             {"id": "e5", "description": "Day off", "tagIds": []},
             {"id": "e6", "description": "Public holiday", "tagIds": ["existing2"]},
+            {"id": "e7", "description": "Annual leave", "tagIds": []},
         ],
     )
 
@@ -88,6 +89,7 @@ def test_run_updates_matching_entries(monkeypatch: pytest.MonkeyPatch) -> None:
         ("e2", ["existing", "tag-dev"]),
         ("e5", ["tag-leave"]),
         ("e6", ["existing2", "tag-holiday"]),
+        ("e7", ["tag-leave"]),
     ]
 
 

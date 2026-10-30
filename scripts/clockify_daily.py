@@ -200,6 +200,18 @@ def create_time_entry(
     return out
 
 
+def delete_time_entry(api_key: str, workspace_id: str, entry_id: str) -> None:
+    url = f"{API_BASE}/workspaces/{workspace_id}/time-entries/{entry_id}"
+    _http_json("DELETE", url, api_key=api_key)
+
+
+def _entry_id(entry: dict[str, Any]) -> str | None:
+    raw = entry.get("id")
+    if isinstance(raw, str) and raw:
+        return raw
+    return None
+
+
 @dataclass
 class Config:
     api_key: str
@@ -223,6 +235,7 @@ class Config:
     end_date: date | None
     public_holidays: set[date]
     day_offs: set[date]
+    overwrite: bool
 
 
 def load_config(
@@ -232,6 +245,7 @@ def load_config(
     target_date_cli: str | None,
     start_date_cli: str | None,
     end_date_cli: str | None,
+    overwrite_cli: bool = False,
 ) -> Config:
     # Auto-load environment variables from .env in the current working directory.
     # Existing process variables are kept (override=False).
@@ -337,6 +351,7 @@ def load_config(
         end_date=end_date,
         public_holidays=public_holidays,
         day_offs=day_offs,
+        overwrite=overwrite_cli,
     )
 
 
@@ -354,12 +369,12 @@ def _target_days(cfg: Config) -> list[date]:
 
 
 def _day_kind(day: date, cfg: Config) -> str:
+    if day.weekday() >= 5:
+        return "weekend"
     if day in cfg.day_offs:
         return "day_off"
     if day in cfg.public_holidays:
         return "public_holiday"
-    if day.weekday() >= 5:
-        return "weekend"
     return "workday"
 
 
@@ -486,6 +501,25 @@ def _build_special_day_entry(
     return start, end, description, False
 
 
+def _build_day_off_entry(cfg: Config, day: date) -> tuple[datetime, datetime, str, bool]:
+    start = datetime.combine(day, time(9, 0), tzinfo=cfg.tz)
+    end = datetime.combine(day, time(17, 0), tzinfo=cfg.tz)
+    return start, end, "Annual leave", False
+
+
+def _planned_entries_for_day(
+    cfg: Config,
+    day: date,
+    day_kind: str,
+) -> list[tuple[datetime, datetime, str, bool]]:
+    if day_kind == "day_off":
+        return [_build_day_off_entry(cfg, day)]
+    if day_kind == "public_holiday":
+        return [_build_special_day_entry(cfg, day, description="Public holiday")]
+    intervals, descs = _build_planned_entries(cfg, day)
+    return [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
+
+
 def list_workspace_tags(api_key: str, workspace_id: str) -> list[dict[str, Any]]:
     url = f"{API_BASE}/workspaces/{workspace_id}/tags"
     out = _http_json("GET", url, api_key=api_key)
@@ -525,22 +559,27 @@ def run_debug(cfg: Config) -> int:
         te_url = _time_entries_url(cfg.workspace_id, "<userId>", start_utc, end_utc)
         _debug_print_request("GET", te_url, api_key=cfg.api_key)
 
-        if not cfg.ignore_day_has_entries:
+        overwrite_day_off = day_kind == "day_off" and cfg.overwrite
+        if overwrite_day_off:
+            print(
+                "  (If this response is a non-empty JSON array, the script DELETEs each entry, then POSTs Annual leave.)",
+                file=sys.stdout,
+            )
+            print(file=sys.stdout)
+            delete_url = f"{API_BASE}/workspaces/{cfg.workspace_id}/time-entries/<entryId>"
+            _debug_print_request("DELETE", delete_url, api_key=cfg.api_key)
+        elif not cfg.ignore_day_has_entries:
             print(
                 "  (If this response is a non-empty JSON array, the script exits and sends no POST requests for this day.)",
                 file=sys.stdout,
             )
             print(file=sys.stdout)
 
-        print("If the time-entries response is empty, the script would send:", file=sys.stdout)
-        entries: list[tuple[datetime, datetime, str, bool]]
-        if day_kind == "day_off":
-            entries = [_build_special_day_entry(cfg, day, description="Day off")]
-        elif day_kind == "public_holiday":
-            entries = [_build_special_day_entry(cfg, day, description="Public holiday")]
+        if overwrite_day_off:
+            print("The script would then send:", file=sys.stdout)
         else:
-            intervals, descs = _build_planned_entries(cfg, day)
-            entries = [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
+            print("If the time-entries response is empty, the script would send:", file=sys.stdout)
+        entries = _planned_entries_for_day(cfg, day, day_kind)
         for start, end, desc, billable in entries:
             body: dict[str, Any] = {
                 "start": _utc_iso(start),
@@ -594,6 +633,7 @@ def run(cfg: Config) -> int:
         else:
             print(f"{day.isoformat()}: workday.", file=sys.stderr)
 
+        existing: list[dict[str, Any]] = []
         if cfg.api_key and uid is not None and not cfg.ignore_day_has_entries:
             day_start = datetime.combine(day, time(0, 0), tzinfo=cfg.tz)
             day_end = day_start + timedelta(days=1)
@@ -604,22 +644,28 @@ def run(cfg: Config) -> int:
                 day_start.astimezone(timezone.utc),
                 day_end.astimezone(timezone.utc),
             )
-            if existing:
+            overwrite_day_off = day_kind == "day_off" and cfg.overwrite
+            if existing and not overwrite_day_off:
                 prefix = "Dry-run: skip — " if cfg.dry_run else "Skip: "
                 print(
                     f"{prefix}{day.isoformat()} already has at least one time entry.",
                     file=sys.stderr,
                 )
                 continue
+            if existing and overwrite_day_off:
+                ids = [eid for eid in (_entry_id(entry) for entry in existing) if eid is not None]
+                joined = ", ".join(ids)
+                if cfg.dry_run:
+                    print(
+                        f"Overwrite {day.isoformat()}: would delete {len(ids)} existing entries: {joined}",
+                        file=sys.stderr,
+                    )
+                else:
+                    for eid in ids:
+                        delete_time_entry(cfg.api_key, cfg.workspace_id, eid)
+                        print(f"Deleted: {eid}", file=sys.stderr)
 
-        entries: list[tuple[datetime, datetime, str, bool]]
-        if day_kind == "day_off":
-            entries = [_build_special_day_entry(cfg, day, description="Day off")]
-        elif day_kind == "public_holiday":
-            entries = [_build_special_day_entry(cfg, day, description="Public holiday")]
-        else:
-            intervals, descs = _build_planned_entries(cfg, day)
-            entries = [(start, end, desc, True) for (start, end), desc in zip(intervals, descs)]
+        entries = _planned_entries_for_day(cfg, day, day_kind)
 
         for start, end, desc, billable in entries:
             tag_name = DESCRIPTION_TO_TAG_NAME.get(desc)
@@ -678,7 +724,7 @@ Environment variables:
   CLOCKIFY_TARGET_DATE       Optional target date YYYY-MM-DD (defaults to current date in TIMEZONE)
   CLOCKIFY_START_DATE        Optional range start date YYYY-MM-DD (inclusive)
   CLOCKIFY_END_DATE          Optional range end date YYYY-MM-DD (inclusive)
-  DAY_OFF                    Optional comma-separated dates (YYYY-MM-DD) logged as one non-billable "Day off" entry
+  DAY_OFF                    Optional comma-separated dates (YYYY-MM-DD) logged as one non-billable "Annual leave" entry from 09:00-17:00
   PUBLIC_HOLIDAYS            Comma- or newline-separated YYYY-MM-DD dates logged as one non-billable "Public holiday" entry. On Actions, set the repository variable.
   DRY_RUN                    If 1, print payloads only (default 0)
 """
@@ -712,6 +758,11 @@ Environment variables:
         "--end-date",
         help="End date YYYY-MM-DD (inclusive). Must be used with --start-date.",
     )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="On DAY_OFF dates, delete existing entries for that day and create the Annual leave entry.",
+    )
     return p
 
 
@@ -724,6 +775,7 @@ def main() -> None:
         target_date_cli=args.date,
         start_date_cli=args.start_date,
         end_date_cli=args.end_date,
+        overwrite_cli=args.overwrite,
     )
     try:
         code = run(cfg)

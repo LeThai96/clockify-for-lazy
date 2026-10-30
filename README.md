@@ -10,10 +10,12 @@ Automate Clockify time entries with randomized work reasons and realistic schedu
 - Skip days that already have records
 - Skip weekends
 - Configurable `DAY_OFF` and `PUBLIC_HOLIDAYS`
-- On `DAY_OFF`: create one non-billable entry (`Day off`)
+- On `DAY_OFF`: create one non-billable entry (`Annual leave`, 09:00–17:00)
 - On `PUBLIC_HOLIDAYS`: create one non-billable entry (`Public holiday`)
 - On regular workdays: generated entries are billable
 - Support single date or date range backfill
+- Review a month of Clockify records against env rules
+- Saved review runs (GUID) can overwrite incorrect days
 - Debug mode to print requests without sending them
 - GitHub Actions schedule support
 
@@ -89,6 +91,17 @@ python scripts/clockify_daily.py --dry-run
 python scripts/clockify_daily.py --debug
 ```
 
+### Overwrite mis-logged day-off dates
+
+If a `DAY_OFF` date already has work entries, `--overwrite` deletes those entries and creates the `Annual leave` record. Other days are left as they are. Preview first with `--dry-run`:
+
+```powershell
+python scripts/clockify_daily.py --date 2026-04-21 --overwrite --dry-run
+python scripts/clockify_daily.py --start-date 2026-04-20 --end-date 2026-04-24 --overwrite
+```
+
+To replace only leave days, limit `--date` or the range to those `DAY_OFF` dates.
+
 ### Add tags to existing entries
 
 ```powershell
@@ -97,6 +110,21 @@ python scripts/clockify_tag_existing.py --start-date 2026-04-01 --end-date 2026-
 
 Use `--dry-run` first to preview tag updates without sending PATCH requests.
 
+### Review a month
+
+Checks Clockify entries against the same schedule rules as the daily script (`TIMEZONE`, work window, entry bounds, `TOTAL_MINUTES`, `STEP_MINUTES`, `DESCRIPTIONS`, `DAY_OFF`, `PUBLIC_HOLIDAYS`, project, tags). Default month is the current month in `TIMEZONE`. Future days in that month are not reviewed.
+
+Each run prints a GUID and writes `reviews/<guid>.json` (gitignored). Incorrect workdays store a generated replacement set; leave and holiday days store the exact expected entry. Weekend leftovers store deletes only.
+
+```powershell
+python scripts/clockify_review.py
+python scripts/clockify_review.py --month 2026-04
+python scripts/clockify_review.py --overwrite 11111111-1111-1111-1111-111111111111 --dry-run
+python scripts/clockify_review.py --overwrite 11111111-1111-1111-1111-111111111111
+```
+
+`--overwrite` loads that saved run and does not re-review. It deletes the current entries on each incorrect day, then creates the stored replacements. Correct days are left as they are. Do not pass `--month` together with `--overwrite`.
+
 ## Important Date Rules
 
 - Use either:
@@ -104,9 +132,11 @@ Use `--dry-run` first to preview tag updates without sending PATCH requests.
   - **or** `--start-date` + `--end-date` (or env equivalents)
 - Do not combine single-date and range options.
 - Weekends are skipped.
-- `DAY_OFF` creates one non-billable entry with description `Day off`.
+- `DAY_OFF` creates one non-billable entry with description `Annual leave` from 09:00 to 17:00.
 - `PUBLIC_HOLIDAYS` creates one non-billable entry with description `Public holiday`.
-- For day off/public holiday entry length, script uses `TOTAL_MINUTES` starting at `WORKDAY_START`.
+- Public holiday entry length uses `TOTAL_MINUTES` starting at `WORKDAY_START`.
+- `--overwrite` replaces existing entries only on `DAY_OFF` dates.
+- The review CLI uses `--month YYYY-MM` (default: current month). Do not combine `--month` with `--overwrite`.
 
 ## GitHub Actions Daily Automation
 

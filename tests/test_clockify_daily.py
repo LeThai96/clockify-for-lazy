@@ -8,6 +8,22 @@ from zoneinfo import ZoneInfo
 
 import clockify_daily as cd
 
+WORKSPACE_TAGS = [
+    {"id": "tag-meeting", "name": "Meeting"},
+    {"id": "tag-dev", "name": "Development"},
+    {"id": "tag-bug", "name": "Bug fixes"},
+    {"id": "tag-review", "name": "Code review"},
+    {"id": "tag-doc", "name": "Documenting"},
+    {"id": "tag-leave", "name": "On-Leave"},
+    {"id": "tag-holiday", "name": "Public Holiday"},
+]
+
+
+def _stub_workspace(monkeypatch: pytest.MonkeyPatch, *, existing: list[dict] | None = None) -> None:
+    monkeypatch.setattr(cd, "get_user", lambda _k: {"id": "u1"})
+    monkeypatch.setattr(cd, "list_workspace_tags", lambda *_a, **_k: WORKSPACE_TAGS)
+    monkeypatch.setattr(cd, "list_time_entries", lambda *a, **k: list(existing or []))
+
 
 def test_parse_hhmm() -> None:
     assert cd._parse_hhmm("09:30") == (9, 30)
@@ -67,6 +83,7 @@ def test_generate_intervals_non_overlapping() -> None:
         end_date=None,
         public_holidays=set(),
         day_offs=set(),
+        overwrite=False,
     )
     intervals = cd._generate_intervals(rng, w0, w1, cfg)
     assert len(intervals) == 3
@@ -324,7 +341,7 @@ def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) 
     # Weekend is skipped
     assert len(created) == 6
     holiday = [kwargs for _args, kwargs in created if kwargs["description"] == "Public holiday"]
-    day_off = [kwargs for _args, kwargs in created if kwargs["description"] == "Day off"]
+    day_off = [kwargs for _args, kwargs in created if kwargs["description"] == "Annual leave"]
     assert len(holiday) == 1
     assert len(day_off) == 1
     assert holiday[0]["billable"] is False
@@ -332,7 +349,11 @@ def test_target_days_range_holiday_and_day_off(monkeypatch: pytest.MonkeyPatch) 
     holiday_minutes = int((holiday[0]["end"] - holiday[0]["start"]).total_seconds() // 60)
     day_off_minutes = int((day_off[0]["end"] - day_off[0]["start"]).total_seconds() // 60)
     assert holiday_minutes == 120
-    assert day_off_minutes == 120
+    assert day_off_minutes == 480
+    assert day_off[0]["start"].hour == 9
+    assert day_off[0]["start"].minute == 0
+    assert day_off[0]["end"].hour == 17
+    assert day_off[0]["end"].minute == 0
     assert holiday[0]["tag_ids"] == ["tag-holiday"]
     assert day_off[0]["tag_ids"] == ["tag-leave"]
 
@@ -396,6 +417,202 @@ def test_actions_variable_logs_public_holiday(monkeypatch: pytest.MonkeyPatch) -
     assert len(created) == 1
     assert created[0]["description"] == "Public holiday"
     assert created[0]["billable"] is False
+
+
+def test_day_off_logs_annual_leave_0900_1700(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("TOTAL_MINUTES", "120")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
+    monkeypatch.setenv("PUBLIC_HOLIDAYS", "")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch)
+    created: list[dict] = []
+
+    def capture_create(*_a, **kwargs):
+        created.append(kwargs)
+        return {"id": "new"}
+
+    monkeypatch.setattr(cd, "create_time_entry", capture_create)
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli="2026-04-07",
+        start_date_cli=None,
+        end_date_cli=None,
+    )
+    assert cd.run(cfg) == 0
+    assert len(created) == 1
+    assert created[0]["description"] == "Annual leave"
+    assert created[0]["billable"] is False
+    assert created[0]["tag_ids"] == ["tag-leave"]
+    assert created[0]["start"] == datetime(2026, 4, 7, 9, 0, tzinfo=timezone.utc)
+    assert created[0]["end"] == datetime(2026, 4, 7, 17, 0, tzinfo=timezone.utc)
+
+
+def test_day_off_skips_weekend_even_with_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "2026-10-17,2026-10-18")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch)
+    created: list[object] = []
+    deleted: list[str] = []
+    monkeypatch.setattr(cd, "create_time_entry", lambda *a, **k: created.append((a, k)) or {"id": "new"})
+    monkeypatch.setattr(cd, "delete_time_entry", lambda _api, _ws, entry_id: deleted.append(entry_id))
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli=None,
+        start_date_cli="2026-10-17",
+        end_date_cli="2026-10-18",
+        overwrite_cli=True,
+    )
+    assert cd._day_kind(date(2026, 10, 17), cfg) == "weekend"
+    assert cd._day_kind(date(2026, 10, 18), cfg) == "weekend"
+    assert cd.run(cfg) == 0
+    assert created == []
+    assert deleted == []
+
+
+def test_day_off_skips_existing_entries_without_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch, existing=[{"id": "e1"}])
+    created: list[object] = []
+    deleted: list[str] = []
+    monkeypatch.setattr(cd, "create_time_entry", lambda *a, **k: created.append((a, k)) or {"id": "new"})
+    monkeypatch.setattr(cd, "delete_time_entry", lambda _api, _ws, entry_id: deleted.append(entry_id))
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli="2026-04-07",
+        start_date_cli=None,
+        end_date_cli=None,
+        overwrite_cli=False,
+    )
+    assert cd.run(cfg) == 0
+    assert created == []
+    assert deleted == []
+
+
+def test_overwrite_replaces_day_off_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch, existing=[{"id": "e1"}, {"id": "e2"}])
+    created: list[dict] = []
+    deleted: list[str] = []
+
+    def capture_create(*_a, **kwargs):
+        created.append(kwargs)
+        return {"id": "new"}
+
+    def capture_delete(_api: str, _ws: str, entry_id: str) -> None:
+        deleted.append(entry_id)
+
+    monkeypatch.setattr(cd, "create_time_entry", capture_create)
+    monkeypatch.setattr(cd, "delete_time_entry", capture_delete)
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli="2026-04-07",
+        start_date_cli=None,
+        end_date_cli=None,
+        overwrite_cli=True,
+    )
+    assert cd.run(cfg) == 0
+    assert deleted == ["e1", "e2"]
+    assert len(created) == 1
+    assert created[0]["description"] == "Annual leave"
+    assert created[0]["billable"] is False
+    assert created[0]["tag_ids"] == ["tag-leave"]
+
+
+def test_overwrite_does_not_delete_workday_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch, existing=[{"id": "e1"}])
+    created: list[object] = []
+    deleted: list[str] = []
+    monkeypatch.setattr(cd, "create_time_entry", lambda *a, **k: created.append((a, k)) or {"id": "new"})
+    monkeypatch.setattr(
+        cd,
+        "delete_time_entry",
+        lambda _api, _ws, entry_id: deleted.append(entry_id),
+    )
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=False,
+        target_date_cli="2026-04-08",
+        start_date_cli=None,
+        end_date_cli=None,
+        overwrite_cli=True,
+    )
+    assert cd.run(cfg) == 0
+    assert created == []
+    assert deleted == []
+
+
+def test_overwrite_dry_run_prints_ids_and_payload(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "ws")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
+    monkeypatch.delenv("CLOCKIFY_DEBUG", raising=False)
+    _stub_workspace(monkeypatch, existing=[{"id": "e1"}, {"id": "e2"}])
+    deleted: list[str] = []
+    created: list[object] = []
+    monkeypatch.setattr(cd, "create_time_entry", lambda *a, **k: created.append((a, k)) or {"id": "new"})
+    monkeypatch.setattr(cd, "delete_time_entry", lambda *_a, **_k: deleted.append("x"))
+    cfg = cd.load_config(
+        dry_run_cli=True,
+        debug_cli=False,
+        target_date_cli="2026-04-07",
+        start_date_cli=None,
+        end_date_cli=None,
+        overwrite_cli=True,
+    )
+    assert cd.run(cfg) == 0
+    captured = capsys.readouterr()
+    assert "would delete 2 existing entries: e1, e2" in captured.err
+    assert '"description": "Annual leave"' in captured.out
+    assert deleted == []
+    assert created == []
+
+
+def test_run_debug_overwrite_prints_delete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("CLOCKIFY_API_KEY", "abcdefghijklmnop")
+    monkeypatch.setenv("CLOCKIFY_WORKSPACE_ID", "workspace-xyz")
+    monkeypatch.setenv("TIMEZONE", "UTC")
+    monkeypatch.setenv("DAY_OFF", "2026-04-07")
+    cfg = cd.load_config(
+        dry_run_cli=False,
+        debug_cli=True,
+        target_date_cli="2026-04-07",
+        start_date_cli=None,
+        end_date_cli=None,
+        overwrite_cli=True,
+    )
+    assert cd.run(cfg) == 0
+    out = capsys.readouterr().out
+    assert "DELETE https://api.clockify.me/api/v1/workspaces/workspace-xyz/time-entries/<entryId>" in out
+    assert '"description": "Annual leave"' in out
+    assert '"billable": false' in out
 
 
 def test_run_fails_when_required_tags_missing(monkeypatch: pytest.MonkeyPatch) -> None:
